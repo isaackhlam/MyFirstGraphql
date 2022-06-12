@@ -1,4 +1,4 @@
-const { ApolloServer, gql } = require("apollo-server");
+const { ApolloServer, gql, ForbiddenError } = require("apollo-server");
 const { isSpecifiedScalarType } = require("graphql");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
@@ -128,6 +128,7 @@ const typeDefs = gql`
     signUp(name: String, email: String!, password: String!): User
     "Login"
     login(email: String!, password: String!): Token
+    deletePost(postId: ID!): Post
   }
 `;
 
@@ -177,11 +178,28 @@ const addUser = ({ name, email, password}) => (
 const createToken = ({ id, email, name }) => 
   jwt.sign({ id, email, name }, SECRET, { expiresIn: "1d" });
 
+const isAuthenticated = resolverFunc => (parent, args, context) =>
+  {
+    if (!context.me) throw new ForbiddenError("Not logged in.");
+    return resolverFunc.apply(null, [parent, args, context]);
+  };
+
+const deletePost = postId =>
+  posts.splice(posts.findIndex(post => post.id === postId), 1)[0];
+
+const isPostAuthor = resolverFunc => (parent, args, context) => {
+  const { postId } = args;
+  const { me } = context;
+  const isAuthor = findPostByPostId(postId).authorId === me.id;
+  if (!isAuthor) throw new ForbiddenError("Only Author Can Delete this Post");
+  return resolverFunc.applyFunc(parent, args, context);
+}
+
 // Resolvers
 const resolvers = {
   Query: {
     hello: () => "world",
-    me: () => findUserByUserId(meId),
+    me: isAuthenticated((parent, args, { me }) => findUserByUserId(me.id)),
     users: () => users,
     user: (root, { name }, context) => findUserByName(name),
     posts: () => posts,
@@ -198,15 +216,15 @@ const resolvers = {
       filterUsersByUserIds(parent.likeGiverIds),
   },
   Mutation: {
-    updateMyInfo: (parent, { userId }, context) => {
+    updateMyInfo: isAuthenticated((parent, args, { me }) => {
       const data = ["name", "age"].reduce(
         (obj, key) => (input[key] ? { ...obj, [key]: input[key] } : obj),
         {}
       );
 
       return updateUserInfo(meId, data);
-    },
-    addFriend: (parent, { userId }, context) => {
+    }),
+    addFriend: isAuthenticated((parent, { userId }, { me: { id: meID } }) => {
       const me = findUserByUserId(meId);
       if (me.friendIds.includes(userId))
         throw new Error(`User ${userID} Already Friend.`);
@@ -217,25 +235,25 @@ const resolvers = {
       updateUserInfo(userId, { friendIds: friend.friendIds.concat(meId) });
 
       return newMe;
-    },
-    addPost: (parent, { input }, context) => {
+    }),
+    addPost: isAuthenticated((parent, { input }, { me }) => {
       const { title, body } = input;
       return addPost({ authorId: meId, title, body });
-    },
-    likePost: (parent, { postId }, context) => {
+    }),
+    likePost: isAuthenticated((parent, { postId }, { me }) => {
       const post = findPostByPostId(postId);
       if (!post) throw new Error(`Post ${postId} Not Exists`);
 
       if (!post.likeGiverIds.includes(postId)) {
         return updatePost(postId, {
-          likeGiverIds: post.likeGiverIds.concat(meId),
+          likeGiverIds: post.likeGiverIds.concat(me.id),
         });
       }
 
       return updatePost(postId, {
-        likeGiverIds: post.likeGiverIds.filter((id) => id === meid),
+        likeGiverIds: post.likeGiverIds.filter(id => id === me.id),
       });
-    },
+    }),
     signUp: async(root, { name, email, password }, context) => {
       const isUserEmailDuplicate = users.some(user => user.email === email);
       if (isUserEmailDuplicate) throw new Error("User Email Duplicate");
@@ -248,7 +266,10 @@ const resolvers = {
       const passwordIsValid = await bcrypt.compare(password, user.password);
       if (!passwordIsValid) throw new Error("Wrong Password");
       return { token: await createToken(user) };
-    }
+    },
+    deletePost: isAuthenticated(isPostAuthor((root, { postId }, { me }) => 
+      deletePost(postId))
+    ),
   },
 };
 
@@ -256,6 +277,18 @@ const resolvers = {
 const server = new ApolloServer({
   typeDefs,
   resolvers,
+  context: async ({ req }) => {
+    const token = req.headers["x-token"];
+    if (token) {
+      try {
+        const me = await jwt.verify(token, SECRET);
+        return { me };
+      } catch (e) {
+        throw new Error("Your session expired. Sign in again.");
+      }
+    }
+    return {};
+  }
 });
 
 // Start Server
