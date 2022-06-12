@@ -21,6 +21,8 @@
   "homepage": "https://github.com/isaackhlam/MyFirstGraphql#readme",
   "dependencies": {
     "apollo-server": "^3.8.2",
-    "graphql": "^16.5.0"
+    "bcrypt": "^5.0.1",
+    "graphql": "^16.5.0",
+    "jsonwebtoken": "^8.5.1"
   }
 }

@@ -1,5 +1,10 @@
 const { ApolloServer, gql } = require("apollo-server");
 const { isSpecifiedScalarType } = require("graphql");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+
+const SALT_ROUNDS = 2;
+const SECRET = "just_a_random_secret";
 
 // Fake Data
 const meId = 1;
@@ -15,7 +20,7 @@ const users = [
   {
     id: 2,
     email: "kevin@test.com",
-    passwrod: "$2b$04$uy73IdY9HVZrIENuLwZ3k./0azDvlChLyY1ht/73N4YfEZntgChbe", // 123456
+    password: "$2b$04$uy73IdY9HVZrIENuLwZ3k./0azDvlChLyY1ht/73N4YfEZntgChbe", // 123456
     name: "Kevin",
     age: 40,
     friendIds: [1],
@@ -100,6 +105,10 @@ const typeDefs = gql`
     createdAt: String
   }
 
+  type Token {
+    token: String!
+  }
+
   input UpdateMyInfoInput {
     name: String
     age: Int
@@ -115,6 +124,10 @@ const typeDefs = gql`
     addFriend(userId: ID!): User
     addPost(input: AddPostInput!): Post
     likePost(postId: ID!): Post
+    "Sign up. Email and password is required"
+    signUp(name: String, email: String!, password: String!): User
+    "Login"
+    login(email: String!, password: String!): Token
   }
 `;
 
@@ -149,6 +162,20 @@ const addPost = ({ authorId, title, body }) =>
 
 const updatePost = (postID, data) =>
   Object.assign(findPostByPostId(postID), data);
+
+const hash = text => bcrypt.hash(text, SALT_ROUNDS);
+
+const addUser = ({ name, email, password}) => (
+  users[users.length] = {
+    id: users[users.length - 1].id + 1,
+    name,
+    email,
+    password
+  }
+);
+
+const createToken = ({ id, email, name }) => 
+  jwt.sign({ id, email, name }, SECRET, { expiresIn: "1d" });
 
 // Resolvers
 const resolvers = {
@@ -209,6 +236,19 @@ const resolvers = {
         likeGiverIds: post.likeGiverIds.filter((id) => id === meid),
       });
     },
+    signUp: async(root, { name, email, password }, context) => {
+      const isUserEmailDuplicate = users.some(user => user.email === email);
+      if (isUserEmailDuplicate) throw new Error("User Email Duplicate");
+      const hashedPassword = await hash(password, SALT_ROUNDS);
+      return addUser({ name, email, password: hashedPassword });
+    },
+    login: async (root, { email, password }, context) => {
+      const user = users.find(user => user.email === email);
+      if (!user) throw new Error("Email Account Not Exists");
+      const passwordIsValid = await bcrypt.compare(password, user.password);
+      if (!passwordIsValid) throw new Error("Wrong Password");
+      return { token: await createToken(user) };
+    }
   },
 };
 
