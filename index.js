@@ -1,5 +1,6 @@
 const { ApolloServer, gql, ForbiddenError } = require("apollo-server");
 const { isSpecifiedScalarType } = require("graphql");
+const { userModel, postModel } = require('./models');
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
@@ -7,53 +8,6 @@ require('dotenv').config()
 
 const SALT_ROUNDS = Number(process.env.SALT_ROUNDS);
 const SECRET = process.env.SECRET;
-
-// Fake Data
-const users = [
-  {
-    id: 1,
-    email: "fong@test.com",
-    password: "$2b$04$wcwaquqi5ea1Ho0aKwkZ0e51/RUkg6SGxaumo8fxzILDmcrv4OBIO", // 123456
-    name: "Fong",
-    age: 23,
-    friendIds: [2],
-  },
-  {
-    id: 2,
-    email: "kevin@test.com",
-    password: "$2b$04$uy73IdY9HVZrIENuLwZ3k./0azDvlChLyY1ht/73N4YfEZntgChbe", // 123456
-    name: "Kevin",
-    age: 40,
-    friendIds: [1],
-  },
-  {
-    id: 3,
-    email: "mary@test.com",
-    password: "$2b$04$UmERaT7uP4hRqmlheiRHbOwGEhskNw05GHYucU73JRf8LgWaqWpTy", // 123456
-    name: "Mary",
-    age: 18,
-    friendIds: [],
-  },
-];
-
-const posts = [
-  {
-    id: 1,
-    authorId: 1,
-    title: "Hello World",
-    body: "This is my first post",
-    likeGiverIds: [1, 2],
-    createdAt: "2018-10-22T01:40:14.941Z",
-  },
-  {
-    id: 2,
-    authorId: 2,
-    title: "Nice Day",
-    body: "Hello My Friend!",
-    likeGiverIds: [1],
-    createdAt: "2018-10-24T01:40:14.941Z",
-  },
-];
 
 // Schema
 const typeDefs = gql`
@@ -134,47 +88,7 @@ const typeDefs = gql`
 `;
 
 // Helper function
-const filterPostsByUserID = (userId) =>
-  posts.filter((post) => userId === post.authorId);
-
-const filterUsersByUserIds = (userIds) =>
-  users.filter((user) => userIds.includes(user.id));
-
-const findUserByUserId = (userId) =>
-  users.find((user) => user.id === Number(userId));
-
-const findUserByName = (name) =>
-  users.find((user) => user.name === name);
-
-const findPostByPostId = (postID) =>
-  posts.find((post) => post.id === Number(postID));
-
-const updateUserInfo = (userId, data) =>
-  Object.assign(findUserByUserId(userId), data);
-
-const addPost = ({ authorId, title, body }) =>
-(posts[posts.length] = {
-  id: posts[posts.length - 1].id + 1,
-  authorId,
-  title,
-  body,
-  likeGiverIds: [],
-  createdAt: new Date().toISOString(),
-});
-
-const updatePost = (postID, data) =>
-  Object.assign(findPostByPostId(postID), data);
-
 const hash = (text, saltRounds) => bcrypt.hash(text, saltRounds);
-
-const addUser = ({ name, email, password }) => (
-  users[users.length] = {
-    id: users[users.length - 1].id + 1,
-    name,
-    email,
-    password
-  }
-);
 
 const createToken = ({ id, email, name }, secret) =>
   jwt.sign({ id, email, name }, secret, { expiresIn: "1d" });
@@ -184,13 +98,10 @@ const isAuthenticated = resolverFunc => (parent, args, context) => {
   return resolverFunc.apply(null, [parent, args, context]);
 };
 
-const deletePost = postId =>
-  posts.splice(posts.findIndex(post => post.id === postId), 1)[0];
-
 const isPostAuthor = resolverFunc => (parent, args, context) => {
   const { postId } = args;
-  const { me } = context;
-  const isAuthor = findPostByPostId(postId).authorId === me.id;
+  const { me, postModel } = context;
+  const isAuthor = postModel.findPostByPostId(Number(postId)).authorId === me.id
   if (!isAuthor) throw new ForbiddenError("Only Author Can Delete this Post");
   return resolverFunc.apply(null, [parent, args, context]);
 }
@@ -199,21 +110,26 @@ const isPostAuthor = resolverFunc => (parent, args, context) => {
 const resolvers = {
   Query: {
     hello: () => "world",
-    me: isAuthenticated((parent, args, { me }) => findUserByUserId(me.id)),
-    users: () => users,
-    user: (root, { name }, context) => findUserByName(name),
-    posts: () => posts,
-    post: (root, { id }, context) => findPostByPostId(id),
+    me: isAuthenticated((parent, args, { me, userModel }) =>
+      userModel.findUserByUserId(me.id)
+    ),
+    users: (root, args, { userModel }) => userModel.getAllUsers(),
+    user: (root, { name }, { userModel }) => userModel.findUserByName(name),
+    posts: (root, args, { postModel }) => postModel.getAllPosts(),
+    post: (root, { id }, { postModel }) =>
+      postModel.findPostByPostId(Number(id)),
   },
   User: {
-    posts: (parent, args, context) => filterPostsByUserID(parent.id),
-    friends: (parent, args, context) =>
-      filterUsersByUserIds(parent.friendIds || []),
+    posts: (parent, args, { postModel }) =>
+      postModel.filterPostsByUserID(parent.id),
+    friends: (parent, args, { userModel }) =>
+      userModel.filterUsersByUserIds(parent.friendIds || []),
   },
   Post: {
-    author: (parent, args, context) => findUserByUserId(parent.authorId),
-    likeGivers: (parent, args, context) =>
-      filterUsersByUserIds(parent.likeGiverIds),
+    author: (parent, args, { userModel }) =>
+      userModel.findUserByUserId(parent.authorId),
+    likeGivers: (parent, args, { userModel }) =>
+      userModel.filterUsersByUserIds(parent.likeGiverIds),
   },
   Mutation: {
     updateMyInfo: isAuthenticated((parent, args, { me }) => {
@@ -279,12 +195,17 @@ const server = new ApolloServer({
   typeDefs,
   resolvers,
   context: async ({ req }) => {
-    const context = { secret: SECRET, saltRounds: SALT_ROUNDS };
+    const context = {
+      secret: SECRET,
+      saltRounds: SALT_ROUNDS,
+      userModel,
+      postModel
+    };
     const token = req.headers["x-token"];
     if (token) {
       try {
         const me = await jwt.verify(token, SECRET);
-        return { me };
+        return { ...context, me };
       } catch (e) {
         throw new Error("Your session expired. Sign in again.");
       }
