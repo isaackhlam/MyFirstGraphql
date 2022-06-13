@@ -3,8 +3,10 @@ const { isSpecifiedScalarType } = require("graphql");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
-const SALT_ROUNDS = 2;
-const SECRET = "just_a_random_secret";
+require('dotenv').config()
+
+const SALT_ROUNDS = Number(process.env.SALT_ROUNDS);
+const SECRET = process.env.SECRET;
 
 // Fake Data
 const meId = 1;
@@ -142,7 +144,7 @@ const filterUsersByUserIds = (userIds) =>
 const findUserByUserId = (userId) =>
   users.find((user) => user.id === Number(userId));
 
-const findUserByName = (name) => 
+const findUserByName = (name) =>
   users.find((user) => user.name === name);
 
 const findPostByPostId = (postID) =>
@@ -152,21 +154,21 @@ const updateUserInfo = (userId, data) =>
   Object.assign(findUserByUserId(userId), data);
 
 const addPost = ({ authorId, title, body }) =>
-  (posts[posts.length] = {
-    id: posts[posts.length - 1].id + 1,
-    authorId,
-    title,
-    body,
-    likeGiverIds: [],
-    createdAt: new Date().toISOString(),
-  });
+(posts[posts.length] = {
+  id: posts[posts.length - 1].id + 1,
+  authorId,
+  title,
+  body,
+  likeGiverIds: [],
+  createdAt: new Date().toISOString(),
+});
 
 const updatePost = (postID, data) =>
   Object.assign(findPostByPostId(postID), data);
 
-const hash = text => bcrypt.hash(text, SALT_ROUNDS);
+const hash = (text, saltRounds) => bcrypt.hash(text, saltRounds);
 
-const addUser = ({ name, email, password}) => (
+const addUser = ({ name, email, password }) => (
   users[users.length] = {
     id: users[users.length - 1].id + 1,
     name,
@@ -175,14 +177,13 @@ const addUser = ({ name, email, password}) => (
   }
 );
 
-const createToken = ({ id, email, name }) => 
-  jwt.sign({ id, email, name }, SECRET, { expiresIn: "1d" });
+const createToken = ({ id, email, name }, secret) =>
+  jwt.sign({ id, email, name }, secret, { expiresIn: "1d" });
 
-const isAuthenticated = resolverFunc => (parent, args, context) =>
-  {
-    if (!context.me) throw new ForbiddenError("Not logged in.");
-    return resolverFunc.apply(null, [parent, args, context]);
-  };
+const isAuthenticated = resolverFunc => (parent, args, context) => {
+  if (!context.me) throw new ForbiddenError("Not logged in.");
+  return resolverFunc.apply(null, [parent, args, context]);
+};
 
 const deletePost = postId =>
   posts.splice(posts.findIndex(post => post.id === postId), 1)[0];
@@ -192,7 +193,7 @@ const isPostAuthor = resolverFunc => (parent, args, context) => {
   const { me } = context;
   const isAuthor = findPostByPostId(postId).authorId === me.id;
   if (!isAuthor) throw new ForbiddenError("Only Author Can Delete this Post");
-  return resolverFunc.applyFunc(parent, args, context);
+  return resolverFunc.apply(null, [parent, args, context]);
 }
 
 // Resolvers
@@ -222,9 +223,9 @@ const resolvers = {
         {}
       );
 
-      return updateUserInfo(meId, data);
+      return updateUserInfo(me.id, data);
     }),
-    addFriend: isAuthenticated((parent, { userId }, { me: { id: meID } }) => {
+    addFriend: isAuthenticated((parent, { userId }, { me: { id: meId } }) => {
       const me = findUserByUserId(meId);
       if (me.friendIds.includes(userId))
         throw new Error(`User ${userID} Already Friend.`);
@@ -238,7 +239,7 @@ const resolvers = {
     }),
     addPost: isAuthenticated((parent, { input }, { me }) => {
       const { title, body } = input;
-      return addPost({ authorId: meId, title, body });
+      return addPost({ authorId: me.id, title, body });
     }),
     likePost: isAuthenticated((parent, { postId }, { me }) => {
       const post = findPostByPostId(postId);
@@ -254,21 +255,21 @@ const resolvers = {
         likeGiverIds: post.likeGiverIds.filter(id => id === me.id),
       });
     }),
-    signUp: async(root, { name, email, password }, context) => {
+    signUp: async (root, { name, email, password }, { saltRounds }) => {
       const isUserEmailDuplicate = users.some(user => user.email === email);
       if (isUserEmailDuplicate) throw new Error("User Email Duplicate");
-      const hashedPassword = await hash(password, SALT_ROUNDS);
+      const hashedPassword = await hash(password, saltRounds);
       return addUser({ name, email, password: hashedPassword });
     },
-    login: async (root, { email, password }, context) => {
+    login: async (root, { email, password }, { secret }) => {
       const user = users.find(user => user.email === email);
       if (!user) throw new Error("Email Account Not Exists");
       const passwordIsValid = await bcrypt.compare(password, user.password);
-      if (!passwordIsValid) throw new Error("Wrong Password");
-      return { token: await createToken(user) };
+      if (!passwordIsValid) throw new AuthenticationError("Wrong Password");
+      return { token: await createToken(user, secret) };
     },
-    deletePost: isAuthenticated(isPostAuthor((root, { postId }, { me }) => 
-      deletePost(postId))
+    deletePost: isAuthenticated(
+      isPostAuthor((root, { postId }, { me }) => deletePost(postId))
     ),
   },
 };
@@ -278,6 +279,7 @@ const server = new ApolloServer({
   typeDefs,
   resolvers,
   context: async ({ req }) => {
+    const context = { secret: SECRET, saltRounds: SALT_ROUNDS };
     const token = req.headers["x-token"];
     if (token) {
       try {
@@ -287,11 +289,14 @@ const server = new ApolloServer({
         throw new Error("Your session expired. Sign in again.");
       }
     }
-    return {};
+    return context;
   }
 });
 
 // Start Server
 server.listen().then(({ url }) => {
   console.log(`? Server ready at ${url}`);
+  console.log(SALT_ROUNDS)
+  console.log(SECRET)
+  console.log()
 });
