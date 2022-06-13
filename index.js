@@ -9,7 +9,6 @@ const SALT_ROUNDS = Number(process.env.SALT_ROUNDS);
 const SECRET = process.env.SECRET;
 
 // Fake Data
-const meId = 1;
 const users = [
   {
     id: 1,
@@ -17,7 +16,7 @@ const users = [
     password: "$2b$04$wcwaquqi5ea1Ho0aKwkZ0e51/RUkg6SGxaumo8fxzILDmcrv4OBIO", // 123456
     name: "Fong",
     age: 23,
-    friendIds: [2, 3],
+    friendIds: [2],
   },
   {
     id: 2,
@@ -33,7 +32,7 @@ const users = [
     password: "$2b$04$UmERaT7uP4hRqmlheiRHbOwGEhskNw05GHYucU73JRf8LgWaqWpTy", // 123456
     name: "Mary",
     age: 18,
-    friendIds: [1],
+    friendIds: [],
   },
 ];
 
@@ -226,14 +225,15 @@ const resolvers = {
       return updateUserInfo(me.id, data);
     }),
     addFriend: isAuthenticated((parent, { userId }, { me: { id: meId } }) => {
+      userId = Number(userId)
       const me = findUserByUserId(meId);
       if (me.friendIds.includes(userId))
-        throw new Error(`User ${userID} Already Friend.`);
+        throw new Error(`User ${userId} Already Friend.`);
       const friend = findUserByUserId(userId);
-      const newMe = updateUserInfo(meId, {
+      const newMe = updateUserInfo(me.id, {
         friendIds: me.friendIds.concat(userId),
       });
-      updateUserInfo(userId, { friendIds: friend.friendIds.concat(meId) });
+      updateUserInfo(userId, { friendIds: friend.friendIds.concat(me.id) });
 
       return newMe;
     }),
